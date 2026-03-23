@@ -1,20 +1,13 @@
 /* ************************************************************************** */
 /*                                                                            */
 /*                                                        :::      ::::::::   */
-/*   minitalk.h                                         :+:      :+:    :+:   */
+/*   server.c                                           :+:      :+:    :+:   */
 /*                                                    +:+ +:+         +:+     */
 /*   By: cmauley <cmauley@student.42lausanne.ch>    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2026/03/23 17:08:05 by cmauley           #+#    #+#             */
-/*   Updated: 2026/03/23 18:40:54 by cmauley          ###   ########.fr       */
+/*   Created: 2026/03/23 18:30:57 by cmauley           #+#    #+#             */
+/*   Updated: 2026/03/23 18:31:33 by cmauley          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
-#ifndef MINITALK_H
-# define MINITALK_H
-
-# include <signal.h>
-# include "../libft/libft.h"
-# include "../ft_printf/include/ft_printf.h"
-
-#endif
+#include "../include/minitalk.h"
