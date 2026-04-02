@@ -189,15 +189,15 @@ _**Ce qu'on DOIT gérer**_
 
 ### **Phase 1: Préparation et Setup**
 
-- [ ] Créer la structure des fichiers:
+- [x] Créer la structure des fichiers:
   - `src/server.c` - Programme serveur
   - `src/client.c` - Programme client
   - `include/minitalk.h` - Header avec les fonctions communes
   - `Makefile` - Compilation
 
-- [ ] Mettre à jour le `Makefile` pour compiler `server` et `client` exécutables
+- [x] Mettre à jour le `Makefile` pour compiler `server` et `client` exécutables
 
-- [ ] Vérifier que `libft` et `ft_printf` compilent correctement
+- [x] Vérifier que `libft` et `ft_printf` compilent correctement
 
 ### **Phase 2: Comprendre les Fonctions Unix** 
 

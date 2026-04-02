@@ -6,7 +6,7 @@
 /*   By: cmauley <cmauley@student.42lausanne.ch>    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/03/23 17:08:05 by cmauley           #+#    #+#             */
-/*   Updated: 2026/03/23 18:40:54 by cmauley          ###   ########.fr       */
+/*   Updated: 2026/03/31 03:41:30 by cmauley          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
@@ -14,6 +14,7 @@
 # define MINITALK_H
 
 # include <signal.h>
+# include <unistd.h>
 # include "../libft/libft.h"
 # include "../ft_printf/include/ft_printf.h"
 
