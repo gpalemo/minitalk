@@ -121,25 +121,65 @@ On doit dire au système: "quand tu reçois SIGUSR1, appelle **cette fonction**"
 
 Cette fonction s'appelle un **`signal handler`** (gestionnaire de signal).
 
+**Dans minitalk, on utilise `sigaction()` avec le flag `SA_SIGINFO`**, qui nous permet d'avoir une signature plus complète:
+
+```c
+void handler(int sig, siginfo_t *info, void *context)
+```
+
+**Avantages:**
+- `siginfo_t *info` contient des informations sur le signal
+- **Surtout: `info->si_pid` donne le PID du processus qui a envoyé le signal**
+- Permet au serveur de savoir à quel client répondre
+
 <pre>
 Exemple conceptuel:
 - Serveur en cours d'exécution
-- SIGUSR1 arrive
-- Le système dit "wsh, t'as un signal"
-- Le handler se déclenche
+- SIGUSR1 arrive du client avec PID 5843
+- Le système dit "wsh, t'as un signal du PID 5843"
+- Le handler se déclenche avec info->si_pid = 5843
 - Le handler reconstruit le bit reçu
+- Le serveur envoie un ACK (SIGUSR1) AU CLIENT pour confirmer
 - On continue
 </pre>
 
-### **2.6 La Performance: Pourquoi c'est limitant?**
+### **2.6 Le Protocole d'ACK (Acknowledgment)**
 
-100 caractères = 800 bits = 800 signaux à envoyer.
+**Le problème:** Si on envoie juste les signaux sans rien, il y a un risque que certains signaux se perdent ou arrivent dans le désordre, surtout avec de longs messages.
 
-**Le défi**: le sujet demande d'envoyer tout ça en 1 seconde maximum.
+**La solution:** Un mécanisme d'**ACK (accusé de réception)** bit par bit:
 
-Entre chaque signal, il y a un petit délai (sinon le système peut perdre des signaux). C'est comme si on devait taper 800 fois très vite : il y a une limite à la vitesse.
+1. **Client envoie 1 bit** au serveur (SIGUSR1 ou SIGUSR2)
+2. **Client se bloque** en attente (`pause()`)
+3. **Serveur reçoit le bit**, le traite, puis **envoie un SIGUSR1 au client** (= "j'ai reçu, OK")
+4. **Client reçoit l'ACK**, sort de la pause, **envoie le bit suivant**
+5. Répète jusqu'à 8 bits par caractère
 
-Solution: on peut utiliser `usleep()` pour mettre des tout petits délais (quelques microsecondes) entre chaque signal.
+**Avantages:**
+- Les signaux ne se perdent pas (chaque bit est confirmé)
+- **Stop-and-wait:** très fiable
+- Fonctionne avec de longs messages (300+ caractères testés)
+
+<pre>
+Échange bit par bit avec ACK:
+
+CLIENT:                   SERVEUR:
+┌──────────────┐          
+│ SIGUSR1/2 ──────────────> Reçoit bit
+│              │          │ Reconstruit
+│ pause() pour ACK        │ Envoie SIGUSR1 (ACK)
+│              <──────────── SIGUSR1 (ACK)
+│ g_ack = 1  │          
+│ Bit suivant ──────────────> Reçoit bit
+│              │          │ ...
+│ pause()      <──────────────
+└──────────────┘          
+</pre>
+
+**Variables clés:**
+- `volatile sig_atomic_t g_ack` = flag pour tracker l'ACK reçu
+- `signal(SIGUSR1, ack_handler)` = le client écoute les ACK
+- `while (g_ack == 0) pause()` = attendre l'ACK avant le prochain bit
 
 ### **2.7 Le Flux Complet (Vue d'ensemble)**
 
@@ -149,31 +189,67 @@ SERVEUR                              CLIENT
 
 Démarrage
 Affiche PID: 12345
-Attend...
+Enregistre handlers SIGUSR1/2
+avec sigaction() + SA_SIGINFO
                                     Démarre avec:
                                     ./client 12345 "Hi"
                                     
+                                    Enregistre handler SIGUSR1 (ACK)
+                                    
                                     Pour chaque caractère:
-                                    Pour chaque bit:
+                                      Pour chaque bit (0-7):
                                         Envoie SIGUSR1/SIGUSR2
-                                        Attend un peu                                       
-Reçoit SIGUSR1/SIGUSR2 ◄──────────────
-Handler reconstruit les bits
-Accumule les caractères
-Quand '\0' reçu: affiche "Hi"
-Attend le client suivant...
+Reçoit SIGUSR1/SIGUSR2 ◄──────────────────
+Handler:
+  Extrait PID client via info->si_pid
+  Reconstruit le bit
+  Envoie SIGUSR1 (ACK) au client
+Envoie SIGUSR1 ────────────────────>
+                                        Reçoit ACK (g_ack = 1)
+                                        Sort de pause()
+(Après 8 bits = 1 char)                Envoie le prochain bit...
+Affiche le caractère
+Réinitialise
+                                        
+(Répète pour chaque caractère)
+
+Reçoit '\0' (8 zéros)            ◄────  Client envoie '\0' à la fin
+Affiche le message complet
+Réinitialise et attend client suivant...
 </pre>
 
+### **2.8 `volatile` et `sig_atomic_t`: Pourquoi?**
+
+**Problème:** Sans protection, le compilateur optimise les variables et crée des boucles infinies:
+
+```c
+int g_ack = 0;
+while (g_ack == 0)  // Le compilateur dit "ça ne change jamais"
+	pause();    // et transforme ça en while(1) ← FREEZE!
+```
+
+**Solution:**
+```c
+volatile sig_atomic_t g_ack = 0;
+```
+
+- **`volatile`** = force le compilateur à relire la variable à chaque fois (pas d'optimisation)
+- **`sig_atomic_t`** = type POSIX qui garantit une opération atomique (une seule instruction machine, pas interruptible par les signaux. Atomique = opération en 1 seule étape, introuvable par les signaux, et non-atomique = opération en plusieurs étapes, les signaux peuvent foutre le bordel au milieu)
+
+**Sans ça:** boucles infinies, freeze, corruption. **Avec ça:** safe et fiable. 
+
 ---
-_**Ce qui est autorisé :**_
+_**Ce qui est utilisé :**_
 
-Pour faire ça, on a besoin de:
+Fonctions POSIX essentielles:
 
-- `signal() / sigaction()`: pour configurer nos handlers
-- `kill()`: pour envoyer les signaux
-- `getpid()`: pour récupérer le PID
-- `usleep()`: pour les délais (sinon trop rapide)
-- `pause() / sleep()`: pour attendre le serveur
+- **`sigaction()`**: configurer les handlers avec plus d'infos (vs `signal()`)
+- **`SA_SIGINFO`**: flag pour avoir `siginfo_t` avec le PID du sender
+- **`kill(pid, signal)`**: envoyer SIGUSR1/SIGUSR2 à un PID spécifique
+- **`getpid()`**: récupérer le PID du processus
+- **`pause()`**: bloquer jusqu'à un signal (économe en CPU)
+- **`volatile sig_atomic_t`**: type spécial pour les variables partagées avec les signaux — atomique + protégé du compilateur (voir section 2.8)
+- **`sigemptyset()`**: initialiser un masque de signaux vide
 
 Pas de sockets, pas de pipes, pas de files. Juste des signaux, bastacusi.
 
@@ -181,111 +257,34 @@ Pas de sockets, pas de pipes, pas de files. Juste des signaux, bastacusi.
 _**Ce qu'on DOIT gérer**_
 
 1. **Les erreurs**: PID invalide, pas d'arguments, processus qui n'existe pas
-2. **Les memory leaks**: chaque malloc a son free
-3. **Les segfaults**: on doit JAMAIS crash
-4. **La stabilité**: le serveur doit pouvoir traiter `10` clients de suite
+2. **Le protocole ACK**: chaque bit doit être confirmé avant le suivant
+3. **Les memory leaks**: chaque malloc a son free
+4. **Les segfaults**: on doit JAMAIS crash
+5. **La conformité POSIX**: utiliser les bons types et drapeaux
+6. **La stabilité**: le serveur doit pouvoir traiter plusieurs clients de suite
 
-## 3. Workflow & TODO
 
-### **Phase 1: Préparation et Setup**
+## 3. Résumé du Protocole Implémenté
 
-- [x] Créer la structure des fichiers:
-  - `src/server.c` - Programme serveur
-  - `src/client.c` - Programme client
-  - `include/minitalk.h` - Header avec les fonctions communes
-  - `Makefile` - Compilation
+**C'est un handshaking per-bit "Stop-and-Wait":**
 
-- [x] Mettre à jour le `Makefile` pour compiler `server` et `client` exécutables
+```
+Pour chaque bit du message:
+  1. Client          : Envoie SIGUSR1/SIGUSR2
+  2. Client         : Bloque en attente (pause)
+  3. Serveur        : Reçoit dans handler, reconstruit le bit
+  4. Serveur        : Envoie SIGUSR1 au client (ACK)
+  5. Client (ACK)   : Reçoit SIGUSR1, met g_ack = 1
+  6. Client         : Sort de pause(), prêt pour le prochain bit
+```
 
-- [x] Vérifier que `libft` et `ft_printf` compilent correctement
+**Avantages:**
+- ✅ Fiable (chaque bit confirmé)
+- ✅ Pas de perte de signaux
+- ✅ Marche avec de longs messages
+- ✅ Respecte les standards POSIX
 
-### **Phase 2: Comprendre les Fonctions Unix** 
-
-Avant de coder, comprendre chaque fonction:
-
-- [ ] **`signal()` / `sigaction()`** - Comment configurer un handler
-- [ ] **`kill()`** - Comment envoyer un signal à un PID
-- [ ] **`getpid()`** - Récupérer le PID du processus
-- [ ] **`pause()`** - Le serveur s'arrête en attente (comment ça marche?)
-- [ ] **`usleep()`** - Faire des petits délais précis en microsecondes
-
-### **Phase 3: Implémentation du Serveur**
-
-**Étape 3.1 - Structure de base**
-- [ ] Afficher le PID au démarrage
-- [ ] Configurer le handler pour SIGUSR1
-- [ ] Configurer le handler pour SIGUSR2
-- [ ] Faire un `pause()` infini pour attendre les signaux
-
-**Étape 3.2 - Reconstruction des bits**
-- [ ] Dans le handler, récupérer quel signal a été reçu
-- [ ] Accumuler les bits dans une variable (8 bits = 1 caractère)
-- [ ] Quand on a 8 bits, convertir en caractère et l'afficher
-- [ ] Quand on reçoit `\0`, on a fini le message
-
-**Étape 3.3 - Gestion de plusieurs clients**
-- [ ] S'assurer que le serveur continue après un premier message
-- [ ] Réinitialiser l'accumulateur pour le client suivant
-
-### **Phase 4: Implémentation du Client**
-
-**Étape 4.1 - Parse des arguments**
-- [ ] Vérifier qu'on a exactement 2 arguments (PID + message)
-- [ ] Convertir le PID en entier (erreur si invalide)
-- [ ] Vérifier que le message n'est pas vide
-
-**Étape 4.2 - Envoi bit par bit**
-- [ ] Pour chaque caractère du message:
-  - [ ] Pour chaque bit (de 0 à 7):
-    - [ ] Si bit = 0 → envoyer SIGUSR1
-    - [ ] Si bit = 1 → envoyer SIGUSR2
-    - [ ] Attendre un petit peu (`usleep()`)
-
-**Étape 4.3 - Finalisation**
-- [ ] Après le dernier caractère, envoyer le `\0` (8 zéros)
-- [ ] Attendre un peu, puis exit
-
-### **Phase 5: Gestion d'Erreurs Robuste**
-
-- [ ] **Client:**
-  - [ ] PID invalide (pas un nombre)
-  - [ ] PID qui n'existe pas (le processus n'existe pas)
-  - [ ] Pas d'arguments
-  - [ ] Message qui n'existe pas / vide
-
-- [ ] **Serveur:**
-  - [ ] Vérifier que `kill()` ne retourne pas d'erreur
-  - [ ] Gérer les signaux correctement même en cas de problème
-
-- [ ] **Général:**
-  - [ ] Pas de fuites mémoire
-  - [ ] Pas de segfault
-  - [ ] Pas de double-free
-
-### **Phase 6: Test et Performance**
-
-- [ ] Tester avec un message court (ex: "Hi")
-- [ ] Tester avec un message long (100+ caractères)
-  - [ ] Chronomètrer: doit être ≤ 1 seconde pour 100 caractères
-- [ ] Tester avec plusieurs clients de suite
-- [ ] Tester avec des caractères spéciaux (accents, symboles, etc.)
-- [ ] Vérifier memory leaks avec `valgrind`
-
-### **Phase 7: Optimisation & Bonus (Optionnel)**
-
-- [ ] Optimiser `usleep()` pour être plus rapide (sans perdre de signaux)
-- [ ] **Bonus**: Serveur envoie ACK au client (pour confirmer réception)
-- [ ] **Bonus**: Afficher la PID du client qui a envoyé le message
-
----
-
-## 4. Par ou commencer ?
-
-1. Créer le premier squelette de fichiers (Phase 1)
-2. Comprendre les 5 fonctions Unix (Phase 2) — lire les man pages
-3. Coder le serveur simple (Phase 3.1 + 3.2)
-4. Coder le client simple (Phase 4.1 + 4.2)
-5. Tester "Hi" → affichage simple
-6. Ajouter la gestion d'erreurs (Phase 5)
-7. Tester la performance (Phase 6)
-8. Bonus? (Phase 7 — optionnel)
+**Variables critiques:**
+- `volatile sig_atomic_t g_ack` — Le flag qui track l'ACK reçu
+- `signal(SIGUSR1, ack_handler)` — Enregistre le handler pour les ACKs
+- `sigaction() + SA_SIGINFO + sigemptyset()` — Configuration robuste du serveur
