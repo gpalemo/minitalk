@@ -6,13 +6,13 @@
 /*   By: cmauley <cmauley@student.42lausanne.ch>    +#+  +:+       +#+        */
 /*                                                +#+#+#+#+#+   +#+           */
 /*   Created: 2026/03/23 18:31:48 by cmauley           #+#    #+#             */
-/*   Updated: 2026/04/06 20:34:40 by cmauley          ###   ########.fr       */
+/*   Updated: 2026/04/07 15:59:23 by cmauley          ###   ########.fr       */
 /*                                                                            */
 /* ************************************************************************** */
 
 #include "../include/minitalk.h"
 
-static volatile	sig_atomic_t	g_ack;
+static volatile sig_atomic_t	g_ack;
 static void	ack_handler(int signum);
 static int	is_error(char *error);
 static int	parse_pid(char *pid);
@@ -57,8 +57,8 @@ static int	is_error(char *error)
 
 static int	parse_pid(char *pid)
 {
-	int i;
-	int result;
+	int	i;
+	int	result;
 
 	i = 0;
 	result = 0;
